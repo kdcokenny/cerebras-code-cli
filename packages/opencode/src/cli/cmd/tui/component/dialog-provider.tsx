@@ -11,12 +11,13 @@ import type { ProviderAuthAuthorization } from "@opencode-ai/sdk/v2"
 import { DialogModel } from "./dialog-model"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
-  opencode: 0,
-  anthropic: 1,
-  "github-copilot": 2,
-  openai: 3,
-  google: 4,
-  openrouter: 5,
+  cerebras: 0,
+  opencode: 1,
+  anthropic: 2,
+  "github-copilot": 3,
+  openai: 4,
+  google: 5,
+  openrouter: 6,
 }
 
 export function createDialogProviderOptions() {
@@ -31,7 +32,7 @@ export function createDialogProviderOptions() {
         title: provider.name,
         value: provider.id,
         description: {
-          opencode: "(Recommended)",
+          cerebras: "(Recommended)",
           anthropic: "(Claude Max or API key)",
         }[provider.id],
         category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Other",
