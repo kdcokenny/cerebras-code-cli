@@ -62,3 +62,62 @@ export async function notifyCompletion(
     })
   }
 }
+
+const MAX_RESULT_LENGTH = 10 * 1024 // 10KB
+
+function truncateResult(text: string): string {
+  if (text.length <= MAX_RESULT_LENGTH) return text
+  return text.slice(0, MAX_RESULT_LENGTH) + "\n\n[truncated - use task_read(id) for full content]"
+}
+
+export interface BatchResult {
+  id: string
+  status: "completed" | "failed"
+  description: string
+  result?: string
+  error?: string
+}
+
+export interface BatchCompletionInput {
+  batchId: string
+  parentSessionID: string
+  results: BatchResult[]
+}
+
+export async function notifyBatchCompletion(input: BatchCompletionInput): Promise<void> {
+  const { batchId, parentSessionID, results } = input
+
+  // Build XML for each task
+  const tasksXml = results
+    .map((task) => {
+      if (task.status === "completed") {
+        return `  <task id="${escape(task.id)}" status="completed">
+    <description>${escape(task.description)}</description>
+    <result>${cdata(truncateResult(task.result ?? ""))}</result>
+  </task>`
+      } else {
+        return `  <task id="${escape(task.id)}" status="failed">
+    <description>${escape(task.description)}</description>
+    <error>${cdata(task.error ?? "Unknown error")}</error>
+  </task>`
+      }
+    })
+    .join("\n")
+
+  const message = `<batch-complete batch-id="${escape(batchId)}">
+${tasksXml}
+</batch-complete>`
+
+  // Inject with synthetic: true (hidden from user) and noReply: false (wake agent)
+  await SessionPrompt.prompt({
+    sessionID: parentSessionID,
+    noReply: false, // Wake the agent!
+    parts: [
+      {
+        type: "text",
+        text: message,
+        synthetic: true, // Hidden from user, visible to agent
+      },
+    ],
+  })
+}

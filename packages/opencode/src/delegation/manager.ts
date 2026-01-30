@@ -12,6 +12,19 @@ const log = Log.create({ service: "delegation.manager" })
 // Track active delegations globally for concurrency cap
 const activeDelegations = new Map<string, Set<string>>() // sessionID -> Set<delegationID>
 
+// Track batch completion status: batchId -> { parentSessionID, total, completed, failed, notified, results }
+const activeBatches = new Map<
+  string,
+  {
+    parentSessionID: string
+    total: number
+    completed: number
+    failed: number
+    notified: boolean
+    results: Map<string, { status: "completed" | "failed"; result?: string; error?: string; description: string }>
+  }
+>()
+
 /**
  * High-level delegation management API.
  * Handles delegation lifecycle: creation, status tracking, and listing.
@@ -28,6 +41,7 @@ export namespace DelegationManager {
     description: string // Task description
     agent: string // Agent type
     prompt: string // The prompt for the child session
+    batchId?: string // Optional batch ID for grouping delegations
   }
 
   /**
@@ -97,12 +111,18 @@ export namespace DelegationManager {
       agent: input.agent,
       prompt: input.prompt,
       createdAt: Date.now(),
+      batchId: input.batchId,
     }
 
     // F) Store the delegation
     await Store.create(delegation)
 
-    // G) Track active delegation for concurrency (add to existing set)
+    // G) Register with batch if batchId provided
+    if (input.batchId) {
+      registerBatch(input.batchId, input.sessionID, id!, input.description)
+    }
+
+    // H) Track active delegation for concurrency (add to existing set)
     activeSet.add(id!)
 
     // Re-check concurrency after insertion to catch races
@@ -123,7 +143,7 @@ export namespace DelegationManager {
       )
     }
 
-    // H) Spawn fire-and-forget runner (no await)
+    // I) Spawn fire-and-forget runner (no await)
     DelegationRunner.run(delegation)
       .catch((error) => {
         log.error("Runner failed", { delegationId: id, error })
@@ -139,7 +159,7 @@ export namespace DelegationManager {
         }
       })
 
-    // I) Return the delegation ID immediately
+    // J) Return the delegation ID immediately
     return id!
   }
 
@@ -157,5 +177,104 @@ export namespace DelegationManager {
    */
   export async function list(sessionID: string): Promise<Delegation.Info[]> {
     return Store.list(sessionID)
+  }
+
+  /**
+   * Register a delegation with a batch.
+   * Creates the batch if it doesn't exist, increments total count.
+   */
+  export function registerBatch(batchId: string, parentSessionID: string, delegationId: string, description: string) {
+    let batch = activeBatches.get(batchId)
+    if (!batch) {
+      batch = {
+        parentSessionID,
+        total: 0,
+        completed: 0,
+        failed: 0,
+        notified: false,
+        results: new Map(),
+      }
+      activeBatches.set(batchId, batch)
+    }
+    batch.total++
+    batch.results.set(delegationId, { status: "completed", description }) // Placeholder until completion
+  }
+
+  /**
+   * Mark a task in a batch as completed.
+   */
+  export function markTaskComplete(batchId: string, delegationId: string, result: string) {
+    const batch = activeBatches.get(batchId)
+    if (!batch) return
+    batch.completed++
+    const existing = batch.results.get(delegationId)
+    if (existing) {
+      existing.status = "completed"
+      existing.result = result
+    }
+  }
+
+  /**
+   * Mark a task in a batch as failed.
+   */
+  export function markTaskFailed(batchId: string, delegationId: string, error: string) {
+    const batch = activeBatches.get(batchId)
+    if (!batch) return
+    batch.failed++
+    const existing = batch.results.get(delegationId)
+    if (existing) {
+      existing.status = "failed"
+      existing.error = error
+    }
+  }
+
+  /**
+   * Check if a batch is complete (all tasks finished).
+   */
+  export function isBatchComplete(batchId: string): boolean {
+    const batch = activeBatches.get(batchId)
+    if (!batch) return false
+    return batch.completed + batch.failed >= batch.total
+  }
+
+  /**
+   * Get batch results for notification.
+   */
+  export function getBatchResults(batchId: string) {
+    const batch = activeBatches.get(batchId)
+    if (!batch) return null
+    return {
+      batchId,
+      parentSessionID: batch.parentSessionID,
+      results: Array.from(batch.results.entries()).map(([id, data]) => ({
+        id,
+        ...data,
+      })),
+    }
+  }
+
+  /**
+   * Mark a batch as notified (prevents duplicate notifications).
+   */
+  export function markBatchNotified(batchId: string) {
+    const batch = activeBatches.get(batchId)
+    if (batch) {
+      batch.notified = true
+    }
+  }
+
+  /**
+   * Check if a batch has been notified.
+   */
+  export function isBatchNotified(batchId: string): boolean {
+    const batch = activeBatches.get(batchId)
+    return batch?.notified ?? false
+  }
+
+  /**
+   * Clean up a batch from tracking.
+   */
+  export function cleanupBatch(batchId: string) {
+    activeBatches.delete(batchId)
   }
 }

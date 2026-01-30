@@ -2,6 +2,7 @@ import z from "zod"
 import { Tool } from "./tool.js"
 import { DelegationManager } from "../delegation/manager.js"
 import { taskReadAfterNotification, standardWarning } from "../delegation/anti-polling.js"
+import { Permission } from "../permission"
 
 export const TaskReadTool = Tool.define("task_read", {
   description: `Read the status and result of a delegated background task. ${taskReadAfterNotification()} ${standardWarning()}`,
@@ -24,16 +25,24 @@ export const TaskReadTool = Tool.define("task_read", {
       }
     }
 
+    // Hard block: prevent polling on running tasks
+    const status = delegation.status
+    if (status === "queued" || status === "running") {
+      throw new Permission.RejectedError(
+        ctx.sessionID,
+        "polling_forbidden",
+        ctx.callID,
+        {
+          task_id: params.id,
+          task_status: delegation.status,
+        },
+        "🚫 POLLING IS FORBIDDEN. TASK IS STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
+      )
+    }
+
     // Format output based on status
     let output: string
-    const status = delegation.status
     switch (status) {
-      case "queued":
-        output = `Status: Queued (waiting to start)\nDescription: ${delegation.description}\nAgent: ${delegation.agent}\n\n⏳ Task still running. ${standardWarning()}`
-        break
-      case "running":
-        output = `Status: Running\nDescription: ${delegation.description}\nAgent: ${delegation.agent}\nStarted: ${new Date(delegation.startedAt).toISOString()}\n\n⏳ Task still running. ${standardWarning()}`
-        break
       case "completed":
         output = `Status: Completed\nDescription: ${delegation.description}\nAgent: ${delegation.agent}\nResult:\n${delegation.result}`
         break

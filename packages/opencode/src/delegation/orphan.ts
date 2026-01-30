@@ -1,6 +1,7 @@
 import { Delegation } from "./types.js"
 import { Store } from "./store.js"
-import { notifyCompletion } from "./notification.js"
+import { notifyCompletion, notifyBatchCompletion } from "./notification.js"
+import { DelegationManager } from "./manager.js"
 import { Log } from "../util/log"
 
 const log = Log.create({ service: "delegation.orphan" })
@@ -48,6 +49,45 @@ export async function initOrphanCleanup(): Promise<void> {
         delegationId: delegation.id,
         error: error instanceof Error ? error.message : String(error),
       })
+    }
+
+    // Handle batch completion for orphaned delegations
+    if (delegation.batchId) {
+      // Re-register orphan with batch (batch state lost on restart)
+      DelegationManager.registerBatch(
+        delegation.batchId,
+        delegation.parentSessionID,
+        delegation.id,
+        delegation.description,
+      )
+
+      // Mark task as failed in batch
+      DelegationManager.markTaskFailed(delegation.batchId, delegation.id, "Delegation interrupted by server restart")
+
+      // Check if batch is now complete
+      if (
+        DelegationManager.isBatchComplete(delegation.batchId) &&
+        !DelegationManager.isBatchNotified(delegation.batchId)
+      ) {
+        DelegationManager.markBatchNotified(delegation.batchId)
+
+        const batchResults = DelegationManager.getBatchResults(delegation.batchId)
+        if (batchResults) {
+          try {
+            await notifyBatchCompletion({
+              batchId: batchResults.batchId,
+              parentSessionID: batchResults.parentSessionID,
+              results: batchResults.results,
+            })
+          } catch (error) {
+            log.warn("Failed to send batch completion notification for orphaned delegations", {
+              batchId: delegation.batchId,
+              error,
+            })
+          }
+          DelegationManager.cleanupBatch(delegation.batchId)
+        }
+      }
     }
   }
 

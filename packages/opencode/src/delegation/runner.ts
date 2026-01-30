@@ -8,7 +8,52 @@ import { Identifier } from "../id/id"
 import { Config } from "../config/config"
 import { Delegation } from "./types"
 import { Store } from "./store"
-import { notifyCompletion } from "./notification"
+import { notifyBatchCompletion } from "./notification"
+import { DelegationManager } from "./manager"
+
+/**
+ * Handle batch-aware completion notification.
+ * Marks the task as complete/failed in its batch, then checks if the entire batch
+ * is complete. If so, sends consolidated batch notification.
+ */
+async function handleBatchCompletion(
+  batchId: string | undefined,
+  delegationId: string,
+  status: "completed" | "failed",
+  resultOrError: string,
+  description: string,
+): Promise<void> {
+  // If no batchId, fall back to individual notification for backwards compatibility
+  if (!batchId) {
+    return
+  }
+
+  // Mark task in batch
+  if (status === "completed") {
+    DelegationManager.markTaskComplete(batchId, delegationId, resultOrError)
+  } else {
+    DelegationManager.markTaskFailed(batchId, delegationId, resultOrError)
+  }
+
+  // Check if batch is complete and not already notified
+  if (DelegationManager.isBatchComplete(batchId) && !DelegationManager.isBatchNotified(batchId)) {
+    const batchResults = DelegationManager.getBatchResults(batchId)
+    if (batchResults) {
+      try {
+        await notifyBatchCompletion({
+          batchId: batchResults.batchId,
+          parentSessionID: batchResults.parentSessionID,
+          results: batchResults.results,
+        })
+        // Only mark notified on SUCCESS
+        DelegationManager.markBatchNotified(batchId)
+      } finally {
+        // Always cleanup, even if notification fails
+        DelegationManager.cleanupBatch(batchId)
+      }
+    }
+  }
+}
 
 export namespace DelegationRunner {
   const log = Log.create({ service: "delegation.runner" })
@@ -249,11 +294,11 @@ export namespace DelegationRunner {
 
         log.info("Delegation completed", { delegationId: delegation.id, duration: Date.now() - startedAt })
 
-        // 16. Notify completion (catch and log failures, don't fail delegation)
+        // 16. Handle batch completion (replaces per-task notification)
         try {
-          await notifyCompletion(completedDelegation)
+          await handleBatchCompletion(delegation.batchId, delegation.id, "completed", output, delegation.description)
         } catch (error) {
-          log.error("Failed to notify completion", {
+          log.error("Failed to handle batch completion", {
             delegationId: delegation.id,
             error: error instanceof Error ? error.message : String(error),
           })
@@ -321,11 +366,11 @@ export namespace DelegationRunner {
         })
       }
 
-      // Notify completion (failure is still a completion)
+      // Handle batch completion (failure is still a completion)
       try {
-        await notifyCompletion(failedDelegation)
+        await handleBatchCompletion(delegation.batchId, delegation.id, "failed", errorMessage, delegation.description)
       } catch (error) {
-        log.error("Failed to notify failure", {
+        log.error("Failed to handle batch completion", {
           delegationId: delegation.id,
           error: error instanceof Error ? error.message : String(error),
         })

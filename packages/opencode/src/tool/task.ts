@@ -41,6 +41,7 @@ export const TaskTool = Tool.define("task", async () => {
         description: params.description,
         agent: params.subagent_type,
         prompt: params.prompt,
+        batchId: ctx.messageID, // Use message ID as batch ID - all tasks in same turn share this
       })
 
       // 3. Return immediately with delegation info

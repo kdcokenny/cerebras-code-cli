@@ -2,6 +2,7 @@ import { z } from "zod"
 import { Tool } from "./tool.js"
 import { DelegationManager } from "../delegation/manager.js"
 import { taskOutputReminder, taskReadAfterNotification } from "../delegation/anti-polling.js"
+import { Permission } from "../permission"
 
 export const TaskListTool = Tool.define("task_list", {
   description: `List all delegated background tasks in the current session. Shows task IDs, descriptions, and status. ${taskOutputReminder()} ${taskReadAfterNotification()}`,
@@ -18,6 +19,20 @@ export const TaskListTool = Tool.define("task_list", {
         metadata: {},
         output: `No delegated tasks found in this session.\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
       }
+    }
+
+    // Hard block: prevent polling while tasks are running
+    const hasRunning = delegations.some((d) => d.status === "queued" || d.status === "running")
+    if (hasRunning) {
+      throw new Permission.RejectedError(
+        ctx.sessionID,
+        "polling_forbidden",
+        ctx.callID,
+        {
+          running_count: delegations.filter((d) => d.status === "queued" || d.status === "running").length,
+        },
+        "🚫 POLLING IS FORBIDDEN. TASKS ARE STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
+      )
     }
 
     // Format the list

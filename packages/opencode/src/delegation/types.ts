@@ -9,6 +9,7 @@ export namespace Delegation {
     parentMessageID: z.string(), // Message containing the task tool call
     parentPartID: z.string(), // The ToolPart ID (callID) for streaming updates
     parentCallID: z.string(), // The callID used to find the parent ToolPart
+    batchId: z.string().optional(), // Batch ID for grouping delegations from same agent turn
     childSessionID: z.string().optional(), // Child session ID (set when running)
     description: z.string(), // Task description
     agent: z.string(), // Agent type (e.g., "explore", "coder")
