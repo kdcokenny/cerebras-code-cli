@@ -38,7 +38,7 @@ export const AcpCommand = cmd({
   },
   handler: async (args) => {
     await bootstrap(process.cwd(), async () => {
-      const server = Server.listen({
+      const server = await Server.listen({
         port: args.port,
         hostname: args.hostname,
       })

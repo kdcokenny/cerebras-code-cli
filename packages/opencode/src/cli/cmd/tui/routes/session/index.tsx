@@ -118,7 +118,7 @@ export function Session() {
   const lastUserMessage = createMemo(() => {
     return messages().findLast((x) => x.role === "user")
   })
-  
+
   createEffect(() => {
     const lastUser = lastUserMessage()
     if (lastUser?.agent && lastUser.agent !== local.agent.current().name) {
@@ -1513,16 +1513,8 @@ ToolRegistry.register<typeof TaskTool>({
         <ToolTitle icon="◉" fallback="Delegating..." when={props.input.subagent_type ?? props.input.description}>
           {Locale.titlecase(props.input.subagent_type ?? "unknown")} Task "{props.input.description}"
         </ToolTitle>
-        <Show when={props.metadata.summary?.length}>
-          <box>
-            <For each={props.metadata.summary ?? []}>
-              {(task) => (
-                <text style={{ fg: task.state.status === "error" ? theme.error : theme.textMuted }}>
-                  ∟ {Locale.titlecase(task.tool)} {task.state.status === "completed" ? task.state.title : ""}
-                </text>
-              )}
-            </For>
-          </box>
+        <Show when={props.metadata.delegationId}>
+          <text style={{ fg: theme.textMuted }}>Delegation ID: {props.metadata.delegationId}</text>
         </Show>
         <text fg={theme.text}>
           {keybind.print("session_child_cycle")}, {keybind.print("session_child_cycle_reverse")}

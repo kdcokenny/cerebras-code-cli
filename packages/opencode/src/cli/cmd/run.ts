@@ -286,7 +286,7 @@ export const RunCommand = cmd({
     }
 
     await bootstrap(process.cwd(), async () => {
-      const server = Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
+      const server = await Server.listen({ port: args.port ?? 0, hostname: "127.0.0.1" })
       const sdk = createOpencodeClient({ baseUrl: `http://${server.hostname}:${server.port}` })
 
       if (args.command) {

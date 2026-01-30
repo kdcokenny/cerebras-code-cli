@@ -24,7 +24,7 @@ export const TuiSpawnCommand = cmd({
       }),
   handler: async (args) => {
     upgrade()
-    const server = Server.listen({
+    const server = await Server.listen({
       port: args.port,
       hostname: "127.0.0.1",
     })
