@@ -20,7 +20,7 @@ export const ServeCommand = cmd({
   handler: async (args) => {
     const hostname = args.hostname
     const port = args.port
-    const server = Server.listen({
+    const server = await Server.listen({
       port,
       hostname,
     })

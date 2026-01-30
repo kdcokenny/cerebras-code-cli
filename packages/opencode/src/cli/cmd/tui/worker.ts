@@ -33,7 +33,7 @@ export const rpc = {
   async server(input: { port: number; hostname: string }) {
     if (server) await server.stop(true)
     try {
-      server = Server.listen(input)
+      server = await Server.listen(input)
       return {
         url: server.url.toString(),
       }

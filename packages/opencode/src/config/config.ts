@@ -11,7 +11,13 @@ import { lazy } from "../util/lazy"
 import { NamedError } from "@opencode-ai/util/error"
 import { Flag } from "../flag/flag"
 import { Auth } from "../auth"
-import { type ParseError as JsoncParseError, applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
+import {
+  type ParseError as JsoncParseError,
+  applyEdits,
+  modify,
+  parse as parseJsonc,
+  printParseErrorCode,
+} from "jsonc-parser"
 import { Instance } from "../project/instance"
 import { LSPServer } from "../lsp/server"
 import { BunProc } from "@/bun"
@@ -693,6 +699,25 @@ export namespace Config {
         })
         .optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
+      delegation: z
+        .object({
+          maxConcurrent: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .default(5)
+            .describe("Maximum number of concurrent delegations per session (default: 5)"),
+          timeoutMs: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .default(15 * 60 * 1000)
+            .describe("Timeout in milliseconds for delegation execution (default: 15 minutes)"),
+        })
+        .optional()
+        .describe("Delegation system configuration"),
       enterprise: z
         .object({
           url: z.string().optional().describe("Enterprise URL"),
