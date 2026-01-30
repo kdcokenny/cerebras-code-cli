@@ -2,8 +2,8 @@ import { Tool } from "./tool"
 import DESCRIPTION from "./task.txt"
 import z from "zod"
 import { Agent } from "../agent/agent"
-import { DelegationManager } from "../delegation/manager"
-import { taskOutputReminder, taskReadAfterNotification, systemRules } from "../delegation/anti-polling"
+import { TaskManager } from "../task/manager"
+import { taskOutputReminder, taskReadAfterNotification, systemRules } from "../task/anti-polling"
 
 export const TaskTool = Tool.define("task", async () => {
   const agents = await Agent.list().then((x) => x.filter((a) => a.mode !== "primary"))
@@ -23,7 +23,7 @@ export const TaskTool = Tool.define("task", async () => {
     async execute(params, ctx) {
       // Guard: ctx.callID must be present
       if (!ctx.callID) {
-        throw new Error("ctx.callID is missing. This tool requires a valid callID for delegation tracking.")
+        throw new Error("ctx.callID is missing. This tool requires a valid callID for task tracking.")
       }
 
       // 1. Validate agent exists
@@ -32,8 +32,8 @@ export const TaskTool = Tool.define("task", async () => {
         throw new Error(`Unknown agent type: ${params.subagent_type}`)
       }
 
-      // 2. Start async delegation
-      const delegationId = await DelegationManager.start({
+      // 2. Start async task
+      const taskId = await TaskManager.start({
         sessionID: ctx.sessionID,
         parentMessageID: ctx.messageID,
         parentPartID: ctx.callID, // The ToolPart ID for streaming updates
@@ -44,11 +44,11 @@ export const TaskTool = Tool.define("task", async () => {
         batchId: ctx.messageID, // Use message ID as batch ID - all tasks in same turn share this
       })
 
-      // 3. Return immediately with delegation info
+      // 3. Return immediately with task info
       return {
         title: params.description,
         metadata: {
-          delegationId,
+          taskId,
           summary: [] as Array<{
             id: string
             tool: string
@@ -57,7 +57,7 @@ export const TaskTool = Tool.define("task", async () => {
           sessionId: undefined as string | undefined, // Will be set by runner when child session starts
         },
         output: [
-          `Task delegated: ${delegationId}`,
+          `Task started: ${taskId}`,
           "",
           "The task is running in the background. You will be notified when it completes.",
           taskReadAfterNotification(),

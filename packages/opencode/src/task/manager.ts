@@ -1,16 +1,16 @@
-import { Delegation } from "./types"
+import { Task } from "./types"
 import { Store } from "./store"
-import { generateDelegationId } from "./id"
-import { DelegationRunner } from "./runner"
+import { generateTaskId } from "./id"
+import { TaskRunner } from "./runner"
 import { Session } from "../session"
 import { Storage } from "../storage/storage"
 import { Config } from "../config/config"
 import { Log } from "../util/log"
 
-const log = Log.create({ service: "delegation.manager" })
+const log = Log.create({ service: "task.manager" })
 
-// Track active delegations globally for concurrency cap
-const activeDelegations = new Map<string, Set<string>>() // sessionID -> Set<delegationID>
+// Track active tasks globally for concurrency cap
+const activeTasks = new Map<string, Set<string>>() // sessionID -> Set<taskID>
 
 // Track batch completion status: batchId -> { parentSessionID, total, completed, failed, notified, results }
 const activeBatches = new Map<
@@ -26,12 +26,12 @@ const activeBatches = new Map<
 >()
 
 /**
- * High-level delegation management API.
- * Handles delegation lifecycle: creation, status tracking, and listing.
+ * High-level task management API.
+ * Handles task lifecycle: creation, status tracking, and listing.
  */
-export namespace DelegationManager {
+export namespace TaskManager {
   /**
-   * Input for starting a new delegation.
+   * Input for starting a new task.
    */
   export interface StartInput {
     sessionID: string // Parent session ID
@@ -41,16 +41,16 @@ export namespace DelegationManager {
     description: string // Task description
     agent: string // Agent type
     prompt: string // The prompt for the child session
-    batchId?: string // Optional batch ID for grouping delegations
+    batchId?: string // Optional batch ID for grouping tasks
   }
 
   /**
-   * Start a new delegation.
+   * Start a new task.
    *
-   * Creates a delegation record in queued state, spawns a fire-and-forget runner,
-   * and returns the delegation ID immediately.
+   * Creates a task record in queued state, spawns a fire-and-forget runner,
+   * and returns the task ID immediately.
    *
-   * The delegation will be executed asynchronously by the runner.
+   * The task will be executed asynchronously by the runner.
    */
   export async function start(input: StartInput): Promise<string> {
     // A) Guard: Validate parent session exists
@@ -58,48 +58,48 @@ export namespace DelegationManager {
       await Session.get(input.sessionID)
     } catch (error) {
       if (error instanceof Storage.NotFoundError) {
-        throw new Error(`Parent session ${input.sessionID} not found. Cannot create delegation.`)
+        throw new Error(`Parent session ${input.sessionID} not found. Cannot create task.`)
       }
       throw error
     }
 
     // B) Get config for concurrency cap
     const config = await Config.get()
-    const maxConcurrent = config.delegation?.maxConcurrent ?? 5
+    const maxConcurrent = config.task?.maxConcurrent ?? 5
 
     // C) Initialize active set BEFORE any further async work
-    if (!activeDelegations.has(input.sessionID)) {
-      activeDelegations.set(input.sessionID, new Set())
+    if (!activeTasks.has(input.sessionID)) {
+      activeTasks.set(input.sessionID, new Set())
     }
-    const activeSet = activeDelegations.get(input.sessionID)!
+    const activeSet = activeTasks.get(input.sessionID)!
 
     // Check concurrency cap
     if (activeSet.size >= maxConcurrent) {
       throw new Error(
-        `Concurrency limit reached: ${activeSet.size}/${maxConcurrent} delegations running. Wait for some to complete.`,
+        `Concurrency limit reached: ${activeSet.size}/${maxConcurrent} tasks running. Wait for some to complete.`,
       )
     }
 
-    // D) Generate readable delegation ID with collision retry
+    // D) Generate readable task ID with collision retry
     let id: string
     let retries = 0
     const maxRetries = 5
 
     while (retries < maxRetries) {
-      id = generateDelegationId()
+      id = generateTaskId()
       const existing = await Store.get(input.sessionID, id)
       if (!existing) break // ID is available
 
       retries++
-      log.warn("Delegation ID collision, retrying", { id, attempt: retries })
+      log.warn("Task ID collision, retrying", { id, attempt: retries })
     }
 
     if (retries >= maxRetries) {
-      throw new Error(`Failed to generate unique delegation ID after ${maxRetries} attempts. Please try again.`)
+      throw new Error(`Failed to generate unique task ID after ${maxRetries} attempts. Please try again.`)
     }
 
-    // E) Create delegation record in queued state
-    const delegation: Delegation.DelegationQueued = {
+    // E) Create task record in queued state
+    const task: Task.TaskQueued = {
       id: id!,
       status: "queued",
       sessionID: input.sessionID,
@@ -114,15 +114,15 @@ export namespace DelegationManager {
       batchId: input.batchId,
     }
 
-    // F) Store the delegation
-    await Store.create(delegation)
+    // F) Store the task
+    await Store.create(task)
 
     // G) Register with batch if batchId provided
     if (input.batchId) {
       registerBatch(input.batchId, input.sessionID, id!, input.description)
     }
 
-    // H) Track active delegation for concurrency (add to existing set)
+    // H) Track active task for concurrency (add to existing set)
     activeSet.add(id!)
 
     // Re-check concurrency after insertion to catch races
@@ -131,59 +131,57 @@ export namespace DelegationManager {
       try {
         await Store.remove(input.sessionID, id!)
       } catch (err) {
-        log.warn("Failed to remove orphaned delegation from storage", { id: id!, error: err })
+        log.warn("Failed to remove orphaned task from storage", { id: id!, error: err })
       } finally {
         activeSet.delete(id!)
         if (activeSet.size === 0) {
-          activeDelegations.delete(input.sessionID)
+          activeTasks.delete(input.sessionID)
         }
       }
-      throw new Error(
-        `Concurrency limit reached after insertion: ${activeSet.size}/${maxConcurrent} delegations running.`,
-      )
+      throw new Error(`Concurrency limit reached after insertion: ${activeSet.size}/${maxConcurrent} tasks running.`)
     }
 
     // I) Spawn fire-and-forget runner (no await)
-    DelegationRunner.run(delegation)
+    TaskRunner.run(task)
       .catch((error) => {
-        log.error("Runner failed", { delegationId: id, error })
+        log.error("Runner failed", { taskId: id, error })
       })
       .finally(() => {
         // Remove from active tracking
-        const set = activeDelegations.get(input.sessionID)
+        const set = activeTasks.get(input.sessionID)
         if (set) {
           set.delete(id!)
           if (set.size === 0) {
-            activeDelegations.delete(input.sessionID)
+            activeTasks.delete(input.sessionID)
           }
         }
       })
 
-    // J) Return the delegation ID immediately
+    // J) Return the task ID immediately
     return id!
   }
 
   /**
-   * Get delegation status by ID.
-   * Returns undefined if delegation not found.
+   * Get task status by ID.
+   * Returns undefined if task not found.
    */
-  export async function get(sessionID: string, id: string): Promise<Delegation.Info | undefined> {
+  export async function get(sessionID: string, id: string): Promise<Task.Info | undefined> {
     return Store.get(sessionID, id)
   }
 
   /**
-   * List all delegations for a session.
-   * Returns empty array if session has no delegations.
+   * List all tasks for a session.
+   * Returns empty array if session has no tasks.
    */
-  export async function list(sessionID: string): Promise<Delegation.Info[]> {
+  export async function list(sessionID: string): Promise<Task.Info[]> {
     return Store.list(sessionID)
   }
 
   /**
-   * Register a delegation with a batch.
+   * Register a task with a batch.
    * Creates the batch if it doesn't exist, increments total count.
    */
-  export function registerBatch(batchId: string, parentSessionID: string, delegationId: string, description: string) {
+  export function registerBatch(batchId: string, parentSessionID: string, taskId: string, description: string) {
     let batch = activeBatches.get(batchId)
     if (!batch) {
       batch = {
@@ -197,17 +195,17 @@ export namespace DelegationManager {
       activeBatches.set(batchId, batch)
     }
     batch.total++
-    batch.results.set(delegationId, { status: "completed", description }) // Placeholder until completion
+    batch.results.set(taskId, { status: "completed", description }) // Placeholder until completion
   }
 
   /**
    * Mark a task in a batch as completed.
    */
-  export function markTaskComplete(batchId: string, delegationId: string, result: string) {
+  export function markTaskComplete(batchId: string, taskId: string, result: string) {
     const batch = activeBatches.get(batchId)
     if (!batch) return
     batch.completed++
-    const existing = batch.results.get(delegationId)
+    const existing = batch.results.get(taskId)
     if (existing) {
       existing.status = "completed"
       existing.result = result
@@ -217,11 +215,11 @@ export namespace DelegationManager {
   /**
    * Mark a task in a batch as failed.
    */
-  export function markTaskFailed(batchId: string, delegationId: string, error: string) {
+  export function markTaskFailed(batchId: string, taskId: string, error: string) {
     const batch = activeBatches.get(batchId)
     if (!batch) return
     batch.failed++
-    const existing = batch.results.get(delegationId)
+    const existing = batch.results.get(taskId)
     if (existing) {
       existing.status = "failed"
       existing.error = error

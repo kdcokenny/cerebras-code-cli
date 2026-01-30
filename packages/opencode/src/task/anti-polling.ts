@@ -1,6 +1,6 @@
 /**
  * Single source of truth for anti-polling messaging.
- * Ensures consistent emoji usage and wording across all task/delegation outputs.
+ * Ensures consistent emoji usage and wording across all task outputs.
  */
 
 /**

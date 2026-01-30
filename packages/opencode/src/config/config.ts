@@ -699,7 +699,7 @@ export namespace Config {
         })
         .optional(),
       tools: z.record(z.string(), z.boolean()).optional(),
-      delegation: z
+      task: z
         .object({
           maxConcurrent: z
             .number()
@@ -707,17 +707,17 @@ export namespace Config {
             .positive()
             .optional()
             .default(5)
-            .describe("Maximum number of concurrent delegations per session (default: 5)"),
+            .describe("Maximum number of concurrent tasks per session (default: 5)"),
           timeoutMs: z
             .number()
             .int()
             .positive()
             .optional()
             .default(15 * 60 * 1000)
-            .describe("Timeout in milliseconds for delegation execution (default: 15 minutes)"),
+            .describe("Timeout in milliseconds for task execution (default: 15 minutes)"),
         })
         .optional()
-        .describe("Delegation system configuration"),
+        .describe("Task system configuration"),
       enterprise: z
         .object({
           url: z.string().optional().describe("Enterprise URL"),

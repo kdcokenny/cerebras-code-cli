@@ -1614,14 +1614,14 @@ const ANIMALS = [
 ] as const
 
 /**
- * Generate a human-readable delegation ID.
+ * Generate a human-readable task ID.
  *
  * Format: adjective-color-animal (e.g., "swift-amber-falcon")
  *
  * IDs are unique enough for a session based on timestamp + random bytes.
  * Collisions across sessions are acceptable.
  */
-export function generateDelegationId(): string {
+export function generateTaskId(): string {
   // Combine timestamp and random bytes for deterministic selection
   const timestamp = Date.now()
   const random = randomBytes(3)

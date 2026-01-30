@@ -1,13 +1,13 @@
 import z from "zod"
 import { Tool } from "./tool.js"
-import { DelegationManager } from "../delegation/manager.js"
-import { taskReadAfterNotification, standardWarning } from "../delegation/anti-polling.js"
+import { TaskManager } from "../task/manager.js"
+import { taskReadAfterNotification, standardWarning } from "../task/anti-polling.js"
 import { Permission } from "../permission"
 
 export const TaskReadTool = Tool.define("task_read", {
   description: `Read the status and result of a delegated background task. ${taskReadAfterNotification()} ${standardWarning()}`,
   parameters: z.object({
-    id: z.string().describe("The delegation ID to read (e.g., 'swift-amber-falcon')"),
+    id: z.string().describe("The task ID to read (e.g., 'swift-amber-falcon')"),
     session_id: z
       .string()
       .optional()
@@ -15,18 +15,18 @@ export const TaskReadTool = Tool.define("task_read", {
   }),
   async execute(params, ctx) {
     const sessionID = params.session_id ?? ctx.sessionID
-    const delegation = await DelegationManager.get(sessionID, params.id)
+    const task = await TaskManager.get(sessionID, params.id)
 
-    if (!delegation) {
+    if (!task) {
       return {
         title: `Task not found: ${params.id}`,
         metadata: {},
-        output: `No delegation found with ID "${params.id}" in session "${sessionID}".`,
+        output: `No task found with ID "${params.id}" in session "${sessionID}".`,
       }
     }
 
     // Hard block: prevent polling on running tasks
-    const status = delegation.status
+    const status = task.status
     if (status === "queued" || status === "running") {
       throw new Permission.RejectedError(
         ctx.sessionID,
@@ -34,7 +34,7 @@ export const TaskReadTool = Tool.define("task_read", {
         ctx.callID,
         {
           task_id: params.id,
-          task_status: delegation.status,
+          task_status: task.status,
         },
         "🚫 POLLING IS FORBIDDEN. TASK IS STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
       )
@@ -44,10 +44,10 @@ export const TaskReadTool = Tool.define("task_read", {
     let output: string
     switch (status) {
       case "completed":
-        output = `Status: Completed\nDescription: ${delegation.description}\nAgent: ${delegation.agent}\nResult:\n${delegation.result}`
+        output = `Status: Completed\nDescription: ${task.description}\nAgent: ${task.agent}\nResult:\n${task.result}`
         break
       case "failed":
-        output = `Status: Failed\nDescription: ${delegation.description}\nAgent: ${delegation.agent}\nError: ${delegation.error}`
+        output = `Status: Failed\nDescription: ${task.description}\nAgent: ${task.agent}\nError: ${task.error}`
         break
     }
 

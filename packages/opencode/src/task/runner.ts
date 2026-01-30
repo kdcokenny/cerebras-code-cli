@@ -6,10 +6,10 @@ import { Bus } from "../bus"
 import { MessageV2 } from "../session/message-v2"
 import { Identifier } from "../id/id"
 import { Config } from "../config/config"
-import { Delegation } from "./types"
+import { Task } from "./types"
 import { Store } from "./store"
 import { notifyBatchCompletion } from "./notification"
-import { DelegationManager } from "./manager"
+import { TaskManager } from "./manager"
 
 /**
  * Handle batch-aware completion notification.
@@ -18,7 +18,7 @@ import { DelegationManager } from "./manager"
  */
 async function handleBatchCompletion(
   batchId: string | undefined,
-  delegationId: string,
+  taskId: string,
   status: "completed" | "failed",
   resultOrError: string,
   description: string,
@@ -30,14 +30,14 @@ async function handleBatchCompletion(
 
   // Mark task in batch
   if (status === "completed") {
-    DelegationManager.markTaskComplete(batchId, delegationId, resultOrError)
+    TaskManager.markTaskComplete(batchId, taskId, resultOrError)
   } else {
-    DelegationManager.markTaskFailed(batchId, delegationId, resultOrError)
+    TaskManager.markTaskFailed(batchId, taskId, resultOrError)
   }
 
   // Check if batch is complete and not already notified
-  if (DelegationManager.isBatchComplete(batchId) && !DelegationManager.isBatchNotified(batchId)) {
-    const batchResults = DelegationManager.getBatchResults(batchId)
+  if (TaskManager.isBatchComplete(batchId) && !TaskManager.isBatchNotified(batchId)) {
+    const batchResults = TaskManager.getBatchResults(batchId)
     if (batchResults) {
       try {
         await notifyBatchCompletion({
@@ -46,26 +46,26 @@ async function handleBatchCompletion(
           results: batchResults.results,
         })
         // Only mark notified on SUCCESS
-        DelegationManager.markBatchNotified(batchId)
+        TaskManager.markBatchNotified(batchId)
       } finally {
         // Always cleanup, even if notification fails
-        DelegationManager.cleanupBatch(batchId)
+        TaskManager.cleanupBatch(batchId)
       }
     }
   }
 }
 
-export namespace DelegationRunner {
-  const log = Log.create({ service: "delegation.runner" })
+export namespace TaskRunner {
+  const log = Log.create({ service: "task.runner" })
 
   /**
-   * Run a single delegation from queued to completed/failed state.
+   * Run a single task from queued to completed/failed state.
    * This is a fire-and-forget function - it handles its own lifecycle.
    *
-   * Architecture: Per-delegation runner (no global loop).
+   * Architecture: Per-task runner (no global loop).
    */
-  export async function run(delegation: Delegation.DelegationQueued): Promise<void> {
-    log.info("Running delegation", { delegationId: delegation.id, agent: delegation.agent })
+  export async function run(task: Task.TaskQueued): Promise<void> {
+    log.info("Running task", { taskId: task.id, agent: task.agent })
 
     const startedAt = Date.now()
     let childSessionID: string | undefined = undefined
@@ -73,28 +73,28 @@ export namespace DelegationRunner {
     try {
       // 1. Get configuration for timeout
       const config = await Config.get()
-      const timeoutMs = config.delegation?.timeoutMs ?? 15 * 60 * 1000
+      const timeoutMs = config.task?.timeoutMs ?? 15 * 60 * 1000
 
       // 2. Get or create child session
-      const agent = await Agent.get(delegation.agent)
+      const agent = await Agent.get(task.agent)
       if (!agent) {
-        throw new Error(`Unknown agent type: ${delegation.agent}`)
+        throw new Error(`Unknown agent type: ${task.agent}`)
       }
 
       const childSession = await Session.create({
-        parentID: delegation.parentSessionID,
-        title: delegation.description + ` (@${agent.name} delegation)`,
+        parentID: task.parentSessionID,
+        title: task.description + ` (@${agent.name} task)`,
       })
       childSessionID = childSession.id
 
       // 3. Transition to running state
-      const runningDelegation: Delegation.DelegationRunning = {
-        ...delegation,
+      const runningTask: Task.TaskRunning = {
+        ...task,
         status: "running",
         childSessionID: childSession.id,
         startedAt,
       }
-      await Store.update(runningDelegation)
+      await Store.update(runningTask)
 
       // 4. Find parent ToolPart by parentCallID (not parentPartID!)
       let parentMessage: MessageV2.WithParts | undefined
@@ -102,16 +102,16 @@ export namespace DelegationRunner {
 
       try {
         parentMessage = await MessageV2.get({
-          sessionID: delegation.parentSessionID,
-          messageID: delegation.parentMessageID,
+          sessionID: task.parentSessionID,
+          messageID: task.parentMessageID,
         })
 
         parentPart = parentMessage.parts.find(
-          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === delegation.parentCallID,
+          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
         )
       } catch (error) {
         log.warn("Could not find parent message/part for streaming updates", {
-          delegationId: delegation.id,
+          taskId: task.id,
           error: error instanceof Error ? error.message : String(error),
         })
       }
@@ -148,8 +148,8 @@ export namespace DelegationRunner {
 
               await Session.updatePart({
                 id: parentPart.id,
-                messageID: delegation.parentMessageID,
-                sessionID: delegation.parentSessionID,
+                messageID: task.parentMessageID,
+                sessionID: task.parentSessionID,
                 type: "tool",
                 tool: parentPart.tool,
                 callID: parentPart.callID,
@@ -159,8 +159,8 @@ export namespace DelegationRunner {
                   output: parentPart.state.status === "completed" ? parentPart.state.output : "",
                   title:
                     parentPart.state.status === "completed" || parentPart.state.status === "running"
-                      ? parentPart.state.title || delegation.description
-                      : delegation.description,
+                      ? parentPart.state.title || task.description
+                      : task.description,
                   metadata: {
                     ...(parentPart.state.metadata || {}),
                     summary: Object.values(parts).sort((a, b) => a.id.localeCompare(b.id)),
@@ -175,7 +175,7 @@ export namespace DelegationRunner {
           } catch (error) {
             // Wrap in try/catch to avoid unhandled rejections if parent part disappears
             log.warn("Failed to update parent part during streaming", {
-              delegationId: delegation.id,
+              taskId: task.id,
               error: error instanceof Error ? error.message : String(error),
             })
           }
@@ -184,8 +184,8 @@ export namespace DelegationRunner {
 
       // 7. Get the parent message to inherit model settings
       const parentMsg = await MessageV2.get({
-        sessionID: delegation.parentSessionID,
-        messageID: delegation.parentMessageID,
+        sessionID: task.parentSessionID,
+        messageID: task.parentMessageID,
       })
 
       const model = agent.model ?? {
@@ -194,7 +194,7 @@ export namespace DelegationRunner {
       }
 
       // 8. Resolve prompt parts
-      const promptParts = await SessionPrompt.resolvePromptParts(delegation.prompt)
+      const promptParts = await SessionPrompt.resolvePromptParts(task.prompt)
 
       // 10. Create a promise that rejects on timeout
       const messageID = Identifier.ascending("message")
@@ -220,7 +220,7 @@ export namespace DelegationRunner {
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
           SessionPrompt.cancel(childSession.id)
-          reject(new Error(`Delegation timed out after ${timeoutMs}ms`))
+          reject(new Error(`Task timed out after ${timeoutMs}ms`))
         }, timeoutMs)
       })
 
@@ -252,22 +252,22 @@ export namespace DelegationRunner {
         const output =
           text + "\n\n" + ["<task_metadata>", `session_id: ${childSession.id}`, "</task_metadata>"].join("\n")
 
-        // 14. Update delegation to completed state
-        const completedDelegation: Delegation.DelegationCompleted = {
-          ...runningDelegation,
+        // 14. Update task to completed state
+        const completedTask: Task.TaskCompleted = {
+          ...runningTask,
           status: "completed",
           completedAt: Date.now(),
           result: output,
         }
-        await Store.update(completedDelegation)
+        await Store.update(completedTask)
 
         // 15. Final update to parent ToolPart with complete summary
         if (parentPart) {
           try {
             await Session.updatePart({
               id: parentPart.id,
-              messageID: delegation.parentMessageID,
-              sessionID: delegation.parentSessionID,
+              messageID: task.parentMessageID,
+              sessionID: task.parentSessionID,
               type: "tool",
               tool: parentPart.tool,
               callID: parentPart.callID,
@@ -275,31 +275,31 @@ export namespace DelegationRunner {
                 status: "completed",
                 input: parentPart.state.input,
                 output,
-                title: delegation.description,
+                title: task.description,
                 metadata: {
-                  delegationId: delegation.id,
+                  taskId: task.id,
                   summary,
                   sessionId: childSession.id,
                 },
-                time: { start: delegation.createdAt, end: Date.now() },
+                time: { start: task.createdAt, end: Date.now() },
               },
             })
           } catch (error) {
             log.warn("Failed to update parent part on completion", {
-              delegationId: delegation.id,
+              taskId: task.id,
               error: error instanceof Error ? error.message : String(error),
             })
           }
         }
 
-        log.info("Delegation completed", { delegationId: delegation.id, duration: Date.now() - startedAt })
+        log.info("Task completed", { taskId: task.id, duration: Date.now() - startedAt })
 
         // 16. Handle batch completion (replaces per-task notification)
         try {
-          await handleBatchCompletion(delegation.batchId, delegation.id, "completed", output, delegation.description)
+          await handleBatchCompletion(task.batchId, task.id, "completed", output, task.description)
         } catch (error) {
           log.error("Failed to handle batch completion", {
-            delegationId: delegation.id,
+            taskId: task.id,
             error: error instanceof Error ? error.message : String(error),
           })
         }
@@ -316,34 +316,34 @@ export namespace DelegationRunner {
     } catch (error) {
       // Handle failure
       const errorMessage = error instanceof Error ? error.message : String(error)
-      log.error("Delegation failed", { delegationId: delegation.id, error: errorMessage })
+      log.error("Task failed", { taskId: task.id, error: errorMessage })
 
-      const failedDelegation: Delegation.DelegationFailed = {
-        ...delegation,
+      const failedTask: Task.TaskFailed = {
+        ...task,
         status: "failed",
         childSessionID: childSessionID,
         startedAt,
         failedAt: Date.now(),
         error: errorMessage,
       }
-      await Store.update(failedDelegation)
+      await Store.update(failedTask)
 
       // Update parent ToolPart with error info
       try {
         const parentMsg = await MessageV2.get({
-          sessionID: delegation.parentSessionID,
-          messageID: delegation.parentMessageID,
+          sessionID: task.parentSessionID,
+          messageID: task.parentMessageID,
         })
 
         const parentPart = parentMsg.parts.find(
-          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === delegation.parentCallID,
+          (p): p is MessageV2.ToolPart => p.type === "tool" && p.callID === task.parentCallID,
         )
 
         if (parentPart) {
           await Session.updatePart({
             id: parentPart.id,
-            messageID: delegation.parentMessageID,
-            sessionID: delegation.parentSessionID,
+            messageID: task.parentMessageID,
+            sessionID: task.parentSessionID,
             type: "tool",
             tool: parentPart.tool,
             callID: parentPart.callID,
@@ -352,26 +352,26 @@ export namespace DelegationRunner {
               input: parentPart.state.input,
               error: errorMessage,
               metadata: {
-                delegationId: delegation.id,
+                taskId: task.id,
                 sessionId: childSessionID,
               },
-              time: { start: delegation.createdAt, end: Date.now() },
+              time: { start: task.createdAt, end: Date.now() },
             },
           })
         }
       } catch (updateError) {
         log.warn("Failed to update parent part on error", {
-          delegationId: delegation.id,
+          taskId: task.id,
           error: updateError instanceof Error ? updateError.message : String(updateError),
         })
       }
 
       // Handle batch completion (failure is still a completion)
       try {
-        await handleBatchCompletion(delegation.batchId, delegation.id, "failed", errorMessage, delegation.description)
+        await handleBatchCompletion(task.batchId, task.id, "failed", errorMessage, task.description)
       } catch (error) {
         log.error("Failed to handle batch completion", {
-          delegationId: delegation.id,
+          taskId: task.id,
           error: error instanceof Error ? error.message : String(error),
         })
       }

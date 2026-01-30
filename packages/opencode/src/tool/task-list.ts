@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { Tool } from "./tool.js"
-import { DelegationManager } from "../delegation/manager.js"
-import { taskOutputReminder, taskReadAfterNotification } from "../delegation/anti-polling.js"
+import { TaskManager } from "../task/manager.js"
+import { taskOutputReminder, taskReadAfterNotification } from "../task/anti-polling.js"
 import { Permission } from "../permission"
 
 export const TaskListTool = Tool.define("task_list", {
@@ -11,32 +11,32 @@ export const TaskListTool = Tool.define("task_list", {
   }),
   async execute(params, ctx) {
     const sessionID = params.session_id ?? ctx.sessionID
-    const delegations = await DelegationManager.list(sessionID)
+    const tasks = await TaskManager.list(sessionID)
 
-    if (delegations.length === 0) {
+    if (tasks.length === 0) {
       return {
         title: "No tasks found",
         metadata: {},
-        output: `No delegated tasks found in this session.\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
+        output: `No tasks found in this session.\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
       }
     }
 
     // Hard block: prevent polling while tasks are running
-    const hasRunning = delegations.some((d) => d.status === "queued" || d.status === "running")
+    const hasRunning = tasks.some((d) => d.status === "queued" || d.status === "running")
     if (hasRunning) {
       throw new Permission.RejectedError(
         ctx.sessionID,
         "polling_forbidden",
         ctx.callID,
         {
-          running_count: delegations.filter((d) => d.status === "queued" || d.status === "running").length,
+          running_count: tasks.filter((d) => d.status === "queued" || d.status === "running").length,
         },
         "🚫 POLLING IS FORBIDDEN. TASKS ARE STILL RUNNING. WAIT FOR <BATCH-COMPLETE>.",
       )
     }
 
     // Format the list
-    const lines = delegations.map((d) => {
+    const lines = tasks.map((d) => {
       const statusIcon = {
         queued: "⏳",
         running: "⏳",
@@ -47,7 +47,7 @@ export const TaskListTool = Tool.define("task_list", {
     })
 
     return {
-      title: `${delegations.length} task(s) found`,
+      title: `${tasks.length} task(s) found`,
       metadata: {},
       output: lines.join("\n") + `\n\n${taskOutputReminder()} ${taskReadAfterNotification()}`,
     }
