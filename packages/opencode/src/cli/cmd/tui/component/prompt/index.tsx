@@ -813,8 +813,10 @@ export function Prompt(props: PromptProps) {
               </text>
               <Show when={store.mode === "normal"}>
                 <box flexDirection="row" gap={1}>
-                  <text fg={theme.textMuted}>{local.model.parsed().provider}</text>
-                  <text flexShrink={0} fg={theme.text}>
+                  <text fg={local.model.parsed().model === "Not configured" ? theme.error : theme.textMuted}>
+                    {local.model.parsed().provider}
+                  </text>
+                  <text flexShrink={0} fg={local.model.parsed().model === "Not configured" ? theme.error : theme.text}>
                     {local.model.parsed().model}
                   </text>
                 </box>
