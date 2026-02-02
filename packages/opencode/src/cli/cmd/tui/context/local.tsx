@@ -228,8 +228,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const value = currentModel()
           if (!value) {
             return {
-              provider: "Cerebras",
-              model: "Loading...",
+              provider: "No provider",
+              model: "Not configured",
               reasoning: false,
             }
           }
