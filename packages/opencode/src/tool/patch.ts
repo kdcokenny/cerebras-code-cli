@@ -3,7 +3,7 @@ import * as path from "path"
 import * as fs from "fs/promises"
 import { Tool } from "./tool"
 import { FileTime } from "../file/time"
-import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
 import { Bus } from "../bus"
 import { FileWatcher } from "../file/watcher"
 import { Instance } from "../project/instance"
@@ -55,30 +55,29 @@ export const PatchTool = Tool.define("patch", {
 
       if (!Filesystem.contains(Instance.directory, filePath)) {
         const parentDir = path.dirname(filePath)
-        if (agent.permission.external_directory === "ask") {
-          await Permission.ask({
-            type: "external_directory",
-            pattern: [parentDir, path.join(parentDir, "*")],
+        const rule = PermissionNext.evaluate("external_directory", parentDir, agent.ruleset)
+
+        if (rule?.action === "deny") {
+          throw new PermissionNext.DeniedError(rule)
+        }
+
+        if (rule?.action === "ask") {
+          await PermissionNext.ask({
+            permission: "external_directory",
+            patterns: [parentDir],
             sessionID: ctx.sessionID,
-            messageID: ctx.messageID,
-            callID: ctx.callID,
-            title: `Patch file outside working directory: ${filePath}`,
             metadata: {
               filepath: filePath,
               parentDir,
             },
+            always: [parentDir, path.join(parentDir, "*")],
+            tool: ctx.callID
+              ? {
+                  messageID: ctx.messageID,
+                  callID: ctx.callID,
+                }
+              : undefined,
           })
-        } else if (agent.permission.external_directory === "deny") {
-          throw new Permission.RejectedError(
-            ctx.sessionID,
-            "external_directory",
-            ctx.callID,
-            {
-              filepath: filePath,
-              parentDir,
-            },
-            `File ${filePath} is not in the current working directory`,
-          )
         }
       }
 
@@ -151,17 +150,29 @@ export const PatchTool = Tool.define("patch", {
       }
     }
 
-    // Check permissions if needed
-    if (agent.permission.edit === "ask") {
-      await Permission.ask({
-        type: "edit",
+    // Check edit permissions
+    const editRule = PermissionNext.evaluate("edit", "*", agent.ruleset)
+
+    if (editRule?.action === "deny") {
+      throw new PermissionNext.DeniedError(editRule)
+    }
+
+    if (editRule?.action === "ask") {
+      await PermissionNext.ask({
+        permission: "edit",
+        patterns: ["*"],
         sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: `Apply patch to ${fileChanges.length} files`,
         metadata: {
           diff: totalDiff,
+          fileCount: fileChanges.length,
         },
+        always: ["*"],
+        tool: ctx.callID
+          ? {
+              messageID: ctx.messageID,
+              callID: ctx.callID,
+            }
+          : undefined,
       })
     }
 

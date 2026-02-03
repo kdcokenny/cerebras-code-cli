@@ -9,12 +9,12 @@ import { Language } from "web-tree-sitter"
 import { Agent } from "@/agent/agent"
 import { $ } from "bun"
 import { Filesystem } from "@/util/filesystem"
-import { Wildcard } from "@/util/wildcard"
-import { Permission } from "@/permission"
 import { fileURLToPath } from "url"
 import { Flag } from "@/flag/flag.ts"
 import path from "path"
 import { iife } from "@/util/iife"
+import { PermissionNext } from "../permission/next"
+import { BashArity } from "../permission/arity"
 
 const DEFAULT_MAX_OUTPUT_LENGTH = 30_000
 const MAX_OUTPUT_LENGTH = (() => {
@@ -116,35 +116,33 @@ export const BashTool = Tool.define("bash", async () => {
 
       const checkExternalDirectory = async (dir: string) => {
         if (Filesystem.contains(Instance.directory, dir)) return
-        const title = `This command references paths outside of ${Instance.directory}`
-        if (agent.permission.external_directory === "ask") {
-          await Permission.ask({
-            type: "external_directory",
-            pattern: [dir, path.join(dir, "*")],
+
+        const rule = PermissionNext.evaluate("external_directory", dir, agent.ruleset)
+
+        if (rule?.action === "deny") {
+          throw new PermissionNext.DeniedError(rule)
+        }
+
+        if (rule?.action === "ask") {
+          await PermissionNext.ask({
+            permission: "external_directory",
+            patterns: [dir],
             sessionID: ctx.sessionID,
-            messageID: ctx.messageID,
-            callID: ctx.callID,
-            title,
             metadata: {
               command: params.command,
             },
+            always: [dir, path.join(dir, "*")],
+            tool: ctx.callID
+              ? {
+                  messageID: ctx.messageID,
+                  callID: ctx.callID,
+                }
+              : undefined,
           })
-        } else if (agent.permission.external_directory === "deny") {
-          throw new Permission.RejectedError(
-            ctx.sessionID,
-            "external_directory",
-            ctx.callID,
-            {
-              command: params.command,
-            },
-            `${title} so this command is not allowed to be executed.`,
-          )
         }
       }
 
       await checkExternalDirectory(cwd)
-
-      const permissions = agent.permission.bash
 
       const askPatterns = new Set<string>()
       for (const node of tree.rootNode.descendantsOfType("command")) {
@@ -189,40 +187,38 @@ export const BashTool = Tool.define("bash", async () => {
 
         // always allow cd if it passes above check
         if (command[0] !== "cd") {
-          const action = Wildcard.allStructured({ head: command[0], tail: command.slice(1) }, permissions)
-          if (action === "deny") {
-            throw new Error(
-              `The user has specifically restricted access to this command, you are not allowed to execute it. Here is the configuration: ${JSON.stringify(permissions)}`,
-            )
+          const prefix = BashArity.prefix(command)
+          const pattern = prefix.join(" ")
+          const rule = PermissionNext.evaluate("bash", pattern, agent.ruleset)
+
+          if (rule?.action === "deny") {
+            throw new PermissionNext.DeniedError(rule)
           }
-          if (action === "ask") {
-            const pattern = (() => {
-              if (command.length === 0) return
-              const head = command[0]
-              // Find first non-flag argument as subcommand
-              const sub = command.slice(1).find((arg) => !arg.startsWith("-"))
-              return sub ? `${head} ${sub} *` : `${head} *`
-            })()
-            if (pattern) {
-              askPatterns.add(pattern)
-            }
+
+          if (rule?.action === "ask") {
+            // Build the "always" pattern: prefix + wildcard for arguments
+            const alwaysPattern = prefix.join(" ") + " *"
+            askPatterns.add(alwaysPattern)
           }
         }
       }
 
       if (askPatterns.size > 0) {
         const patterns = Array.from(askPatterns)
-        await Permission.ask({
-          type: "bash",
-          pattern: patterns,
+        await PermissionNext.ask({
+          permission: "bash",
+          patterns: patterns,
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: params.command,
           metadata: {
             command: params.command,
-            patterns,
           },
+          always: patterns,
+          tool: ctx.callID
+            ? {
+                messageID: ctx.messageID,
+                callID: ctx.callID,
+              }
+            : undefined,
         })
       }
 

@@ -19,6 +19,7 @@ import { Format } from "../format"
 import { MessageV2 } from "../session/message-v2"
 import { TuiRoute } from "./tui"
 import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
 import { Instance } from "../project/instance"
 import { Vcs } from "../project/vcs"
 import { Agent } from "../agent/agent"
@@ -1357,15 +1358,20 @@ export namespace Server {
             permissionID: z.string(),
           }),
         ),
-        validator("json", z.object({ response: Permission.Response })),
+        validator(
+          "json",
+          z.object({
+            response: PermissionNext.Reply,
+            message: z.string().optional(),
+          }),
+        ),
         async (c) => {
           const params = c.req.valid("param")
-          const sessionID = params.sessionID
           const permissionID = params.permissionID
-          Permission.respond({
-            sessionID,
-            permissionID,
-            response: c.req.valid("json").response,
+          const body = c.req.valid("json")
+          await PermissionNext.reply({
+            requestID: permissionID,
+            response: body.response,
           })
           return c.json(true)
         },

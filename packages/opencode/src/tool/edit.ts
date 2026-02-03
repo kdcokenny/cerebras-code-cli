@@ -9,6 +9,7 @@ import { Tool } from "./tool"
 import { LSP } from "../lsp"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
 import DESCRIPTION from "./edit.txt"
 import { File } from "../file"
 import { Bus } from "../bus"
@@ -44,30 +45,19 @@ export const EditTool = Tool.define("edit", {
     const filePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
     if (!Filesystem.contains(Instance.directory, filePath)) {
       const parentDir = path.dirname(filePath)
-      if (agent.permission.external_directory === "ask") {
-        await Permission.ask({
-          type: "external_directory",
-          pattern: [parentDir, path.join(parentDir, "*")],
+      const rule = PermissionNext.evaluate("external_directory", parentDir, agent.ruleset)
+      if (rule?.action === "deny") {
+        throw new PermissionNext.DeniedError(rule)
+      }
+      if (rule?.action === "ask") {
+        await PermissionNext.ask({
+          permission: "external_directory",
+          patterns: [parentDir],
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: `Edit file outside working directory: ${filePath}`,
-          metadata: {
-            filepath: filePath,
-            parentDir,
-          },
+          metadata: { filepath: filePath, parentDir },
+          always: [parentDir + "/*"],
+          tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
         })
-      } else if (agent.permission.external_directory === "deny") {
-        throw new Permission.RejectedError(
-          ctx.sessionID,
-          "external_directory",
-          ctx.callID,
-          {
-            filepath: filePath,
-            parentDir,
-          },
-          `File ${filePath} is not in the current working directory`,
-        )
       }
     }
 
@@ -78,17 +68,18 @@ export const EditTool = Tool.define("edit", {
       if (params.oldString === "") {
         contentNew = params.newString
         diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
-        if (agent.permission.edit === "ask") {
-          await Permission.ask({
-            type: "edit",
+        const rule = PermissionNext.evaluate("edit", filePath, agent.ruleset)
+        if (rule?.action === "deny") {
+          throw new PermissionNext.DeniedError(rule)
+        }
+        if (rule?.action === "ask") {
+          await PermissionNext.ask({
+            permission: "edit",
+            patterns: [filePath],
             sessionID: ctx.sessionID,
-            messageID: ctx.messageID,
-            callID: ctx.callID,
-            title: "Edit this file: " + filePath,
-            metadata: {
-              filePath,
-              diff,
-            },
+            metadata: { filePath, diff },
+            always: [filePath],
+            tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
           })
         }
         await Bun.write(filePath, params.newString)
@@ -109,17 +100,18 @@ export const EditTool = Tool.define("edit", {
       diff = trimDiff(
         createTwoFilesPatch(filePath, filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)),
       )
-      if (agent.permission.edit === "ask") {
-        await Permission.ask({
-          type: "edit",
+      const rule = PermissionNext.evaluate("edit", filePath, agent.ruleset)
+      if (rule?.action === "deny") {
+        throw new PermissionNext.DeniedError(rule)
+      }
+      if (rule?.action === "ask") {
+        await PermissionNext.ask({
+          permission: "edit",
+          patterns: [filePath],
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: "Edit this file: " + filePath,
-          metadata: {
-            filePath,
-            diff,
-          },
+          metadata: { filePath, diff },
+          always: [filePath],
+          tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
         })
       }
 

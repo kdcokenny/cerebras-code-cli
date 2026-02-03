@@ -3,6 +3,7 @@ import * as path from "path"
 import { Tool } from "./tool"
 import { LSP } from "../lsp"
 import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
 import DESCRIPTION from "./write.txt"
 import { Bus } from "../bus"
 import { File } from "../file"
@@ -23,30 +24,19 @@ export const WriteTool = Tool.define("write", {
     const filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(Instance.directory, params.filePath)
     if (!Filesystem.contains(Instance.directory, filepath)) {
       const parentDir = path.dirname(filepath)
-      if (agent.permission.external_directory === "ask") {
-        await Permission.ask({
-          type: "external_directory",
-          pattern: [parentDir, path.join(parentDir, "*")],
+      const rule = PermissionNext.evaluate("external_directory", filepath, agent.ruleset)
+      if (rule?.action === "deny") {
+        throw new PermissionNext.DeniedError(rule)
+      }
+      if (rule?.action === "ask") {
+        await PermissionNext.ask({
+          permission: "external_directory",
+          patterns: [parentDir, path.join(parentDir, "*")],
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: `Write file outside working directory: ${filepath}`,
-          metadata: {
-            filepath,
-            parentDir,
-          },
+          metadata: { filepath, parentDir },
+          always: [parentDir, path.join(parentDir, "*")],
+          tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
         })
-      } else if (agent.permission.external_directory === "deny") {
-        throw new Permission.RejectedError(
-          ctx.sessionID,
-          "external_directory",
-          ctx.callID,
-          {
-            filepath: filepath,
-            parentDir,
-          },
-          `File ${filepath} is not in the current working directory`,
-        )
       }
     }
 
@@ -54,19 +44,20 @@ export const WriteTool = Tool.define("write", {
     const exists = await file.exists()
     if (exists) await FileTime.assert(ctx.sessionID, filepath)
 
-    if (agent.permission.edit === "ask")
-      await Permission.ask({
-        type: "write",
+    const rule = PermissionNext.evaluate("edit", filepath, agent.ruleset)
+    if (rule?.action === "deny") {
+      throw new PermissionNext.DeniedError(rule)
+    }
+    if (rule?.action === "ask") {
+      await PermissionNext.ask({
+        permission: "write",
+        patterns: [filepath],
         sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: exists ? "Overwrite this file: " + filepath : "Create new file: " + filepath,
-        metadata: {
-          filePath: filepath,
-          content: params.content,
-          exists,
-        },
+        metadata: { filePath: filepath, content: params.content, exists },
+        always: [filepath],
+        tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
       })
+    }
 
     await Bun.write(filepath, params.content)
     await Bus.publish(File.Event.Edited, {

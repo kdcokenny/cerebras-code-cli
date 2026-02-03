@@ -1,12 +1,15 @@
 import { Decimal } from "decimal.js"
 import z from "zod"
-import type { LanguageModelV2Usage as LanguageModelUsage, SharedV2ProviderMetadata as ProviderMetadata } from "@ai-sdk/provider"
+import type {
+  LanguageModelV2Usage as LanguageModelUsage,
+  SharedV2ProviderMetadata as ProviderMetadata,
+} from "@ai-sdk/provider"
 import { Bus } from "../bus"
 import { Config } from "../config/config"
 import { Flag } from "../flag/flag"
 import { Identifier } from "../id/id"
 import { Installation } from "../installation"
-
+import { PermissionNext } from "../permission/next"
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
 import { MessageV2 } from "./message-v2"
@@ -68,6 +71,7 @@ export namespace Session {
           diff: z.string().optional(),
         })
         .optional(),
+      ruleset: z.lazy(() => PermissionNext.Ruleset).optional(),
     })
     .meta({
       ref: "Session",

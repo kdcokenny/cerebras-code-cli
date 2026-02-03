@@ -3,8 +3,8 @@ import z from "zod"
 import { Tool } from "./tool"
 import { Skill } from "../skill"
 import { ConfigMarkdown } from "../config/markdown"
-import { Permission } from "../permission"
-import { Config } from "../config/config"
+import { PermissionNext } from "../permission/next"
+import { Agent } from "../agent/agent"
 
 export const SkillTool = Tool.define("skill", async () => {
   const skills = await Skill.all()
@@ -48,20 +48,20 @@ export const SkillTool = Tool.define("skill", async () => {
         throw new Error(`Skill "${params.name}" not found. Available skills: ${available || "none"}`)
       }
 
-      // Ask for permission (webfetch permission controls skill loading)
-      const config = await Config.get()
-      if (config.permission?.webfetch === "ask") {
-        await Permission.ask({
-          type: "skill",
-          pattern: params.name,
+      // Check permission (webfetch permission controls skill loading)
+      const agent = await Agent.get(ctx.agent)
+      const rule = PermissionNext.evaluate("webfetch", params.name, agent.ruleset)
+      if (rule?.action === "deny") {
+        throw new PermissionNext.DeniedError(rule)
+      }
+      if (rule?.action === "ask") {
+        await PermissionNext.ask({
+          permission: "skill",
+          patterns: [params.name],
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: `Load skill: ${skill.name}`,
-          metadata: {
-            name: skill.name,
-            description: skill.description,
-          },
+          metadata: { name: skill.name, description: skill.description },
+          always: [params.name],
+          tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
         })
       }
 

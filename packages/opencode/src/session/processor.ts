@@ -5,6 +5,7 @@ import { Identifier } from "@/id/id"
 import { Session } from "."
 import { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
+import { PermissionNext } from "@/permission/next"
 import { Snapshot } from "@/snapshot"
 import { SessionSummary } from "./summary"
 import { Bus } from "@/bus"
@@ -158,31 +159,27 @@ export namespace SessionProcessor {
                           JSON.stringify(p.state.input) === JSON.stringify(value.input),
                       )
                     ) {
-                      const permission = await Agent.get(input.assistantMessage.mode).then((x) => x.permission)
-                      if (permission.doom_loop === "ask") {
-                        await Permission.ask({
-                          type: "doom_loop",
-                          pattern: value.toolName,
+                      const agent = await Agent.get(input.assistantMessage.mode)
+                      const rule = PermissionNext.evaluate("doom_loop", "*", agent.ruleset)
+
+                      if (rule && rule.action === "deny") {
+                        throw new PermissionNext.DeniedError(rule)
+                      }
+
+                      if (!rule || rule.action === "ask") {
+                        await PermissionNext.ask({
+                          permission: "doom_loop",
+                          patterns: [value.toolName],
                           sessionID: input.assistantMessage.sessionID,
-                          messageID: input.assistantMessage.id,
-                          callID: value.toolCallId,
-                          title: `Possible doom loop: "${value.toolName}" called ${DOOM_LOOP_THRESHOLD} times with identical arguments`,
                           metadata: {
                             tool: value.toolName,
                             input: value.input,
                           },
-                        })
-                      } else if (permission.doom_loop === "deny") {
-                        throw new Permission.RejectedError(
-                          input.assistantMessage.sessionID,
-                          "doom_loop",
-                          value.toolCallId,
-                          {
-                            tool: value.toolName,
-                            input: value.input,
+                          tool: {
+                            messageID: input.assistantMessage.id,
+                            callID: value.toolCallId,
                           },
-                          `You seem to be stuck in a doom loop, please stop repeating the same action`,
-                        )
+                        })
                       }
                     }
                   }
@@ -215,13 +212,26 @@ export namespace SessionProcessor {
                 case "tool-error": {
                   const match = toolcalls[value.toolCallId]
                   if (match && match.state.status === "running") {
+                    // Determine metadata based on error type
+                    let metadata: any = undefined
+                    if (value.error instanceof Permission.RejectedError) {
+                      metadata = value.error.metadata
+                    } else if (value.error instanceof PermissionNext.DeniedError) {
+                      metadata = { rule: value.error.rule }
+                    } else if (
+                      value.error instanceof PermissionNext.RejectedError ||
+                      value.error instanceof PermissionNext.CorrectedError
+                    ) {
+                      metadata = {}
+                    }
+
                     await Session.updatePart({
                       ...match,
                       state: {
                         status: "error",
                         input: value.input,
                         error: (value.error as any).toString(),
-                        metadata: value.error instanceof Permission.RejectedError ? value.error.metadata : undefined,
+                        metadata,
                         time: {
                           start: match.state.time.start,
                           end: Date.now(),
@@ -229,7 +239,13 @@ export namespace SessionProcessor {
                       },
                     })
 
-                    if (value.error instanceof Permission.RejectedError) {
+                    // Block session if permission-related error
+                    if (
+                      value.error instanceof Permission.RejectedError ||
+                      value.error instanceof PermissionNext.RejectedError ||
+                      value.error instanceof PermissionNext.CorrectedError ||
+                      value.error instanceof PermissionNext.DeniedError
+                    ) {
                       blocked = true
                     }
                     delete toolcalls[value.toolCallId]

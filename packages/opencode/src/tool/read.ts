@@ -9,6 +9,7 @@ import { Filesystem } from "../util/filesystem"
 import { Instance } from "../project/instance"
 import { Identifier } from "../id/id"
 import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
 import { Agent } from "@/agent/agent"
 import { iife } from "@/util/iife"
 
@@ -32,30 +33,19 @@ export const ReadTool = Tool.define("read", {
 
     if (!ctx.extra?.["bypassCwdCheck"] && !Filesystem.contains(Instance.directory, filepath)) {
       const parentDir = path.dirname(filepath)
-      if (agent.permission.external_directory === "ask") {
-        await Permission.ask({
-          type: "external_directory",
-          pattern: [parentDir, path.join(parentDir, "*")],
+      const rule = PermissionNext.evaluate("external_directory", parentDir, agent.ruleset)
+      if (rule?.action === "deny") {
+        throw new PermissionNext.DeniedError(rule)
+      }
+      if (rule?.action === "ask") {
+        await PermissionNext.ask({
+          permission: "external_directory",
+          patterns: [parentDir],
           sessionID: ctx.sessionID,
-          messageID: ctx.messageID,
-          callID: ctx.callID,
-          title: `Access file outside working directory: ${filepath}`,
-          metadata: {
-            filepath,
-            parentDir,
-          },
+          metadata: { filepath, parentDir },
+          always: [parentDir + "/*"],
+          tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
         })
-      } else if (agent.permission.external_directory === "deny") {
-        throw new Permission.RejectedError(
-          ctx.sessionID,
-          "external_directory",
-          ctx.callID,
-          {
-            filepath: filepath,
-            parentDir,
-          },
-          `File ${filepath} is not in the current working directory`,
-        )
       }
     }
 

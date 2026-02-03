@@ -9,14 +9,7 @@ import { SessionRevert } from "./revert"
 import { Session } from "."
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
-import {
-  generateText,
-  generateObject,
-  tool,
-  wrapLanguageModel,
-  stepCountIs,
-  jsonSchema,
-} from "ai"
+import { generateText, generateObject, tool, wrapLanguageModel, stepCountIs, jsonSchema } from "ai"
 import type { ModelMessage, Tool as AITool } from "@ai-sdk/provider-utils"
 import { SessionCompaction } from "./compaction"
 import { Instance } from "../project/instance"
@@ -24,6 +17,7 @@ import { Bus } from "../bus"
 import { ProviderTransform } from "../provider/transform"
 import { SystemPrompt } from "./system"
 import { Plugin } from "../plugin"
+import { PermissionNext } from "../permission/next"
 
 import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
@@ -269,7 +263,7 @@ export namespace SessionPrompt {
       }
 
       if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
-      
+
       // Check for switch_mode tool in the LATEST assistant message only
       // Only trigger if auto_switch_models is enabled and we haven't already switched
       // Read config fresh (invalidate cache first to get latest settings)
@@ -277,27 +271,27 @@ export namespace SessionPrompt {
       const switchCfg = await Config.getGlobal()
       // Explicitly check for false - undefined/true means enabled
       const autoSwitchEnabled = switchCfg.auto_switch_models !== false
-      
+
       if (autoSwitchEnabled) {
         const latestAssistantMsg = msgs.filter((m) => m.info.role === "assistant").at(-1)
         const switchToolCall = latestAssistantMsg?.parts.find(
-          (p) => p.type === "tool" && (p as any).tool === "switch_mode" && (p as any).state?.status === "completed"
+          (p) => p.type === "tool" && (p as any).tool === "switch_mode" && (p as any).state?.status === "completed",
         ) as any
-        
+
         if (switchToolCall) {
           // Get the mode from state.input (the tool arguments)
           const targetMode = switchToolCall.state?.input?.mode
           const reason = switchToolCall.state?.input?.reason ?? "Mode switch requested"
-          
+
           // Only switch if we're not already in the target mode
           if (targetMode && lastUser.agent !== targetMode) {
             // Get the model for the target mode
             const modeModelKey = `${targetMode}_model` as keyof typeof switchCfg
             const modeModel = (switchCfg as any)[modeModelKey] as string | undefined
-            
+
             if (modeModel) {
               log.info("switching mode via tool", { from: lastUser.agent, to: targetMode, reason })
-              
+
               const targetModel = Provider.parseModel(modeModel)
               const continueMsg = await Session.updateMessage({
                 id: Identifier.ascending("message"),
@@ -307,7 +301,7 @@ export namespace SessionPrompt {
                 agent: targetMode,
                 model: targetModel,
               })
-              
+
               await Session.updatePart({
                 id: Identifier.ascending("part"),
                 messageID: continueMsg.id,
@@ -317,7 +311,7 @@ export namespace SessionPrompt {
                 text: `Continue with ${targetMode} mode. ${reason}`,
                 time: { start: Date.now(), end: Date.now() },
               })
-              
+
               // Continue the loop with the new mode
               continue
             } else {
@@ -326,7 +320,7 @@ export namespace SessionPrompt {
           }
         }
       }
-      
+
       if (
         lastAssistant?.finish &&
         !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
@@ -584,10 +578,7 @@ export namespace SessionPrompt {
             error,
           })
         },
-        async experimental_repairToolCall(input: {
-          toolCall: { toolName: string; input: string }
-          error: Error
-        }) {
+        async experimental_repairToolCall(input: { toolCall: { toolName: string; input: string }; error: Error }) {
           const lower = input.toolCall.toolName.toLowerCase()
           if (lower !== input.toolCall.toolName && tools[lower]) {
             log.info("repairing tool call", {
@@ -780,13 +771,22 @@ export namespace SessionPrompt {
       mergeDeep(await ToolRegistry.enabled(input.agent)),
       mergeDeep(input.tools ?? {}),
     )
-    
+
+    // Get set of disabled tools based on agent's ruleset (deny+* rules)
+    const allToolNames = [
+      ...(await ToolRegistry.tools(input.model.providerID)).map((t) => t.id),
+      ...Object.keys(await MCP.tools()),
+    ]
+    const disabledTools = PermissionNext.disabled(allToolNames, input.agent.ruleset)
+
     // Check if auto_switch_models is disabled - if so, hide the switch_mode tool
     Config.global.reset()
     const toolsCfg = await Config.getGlobal()
     const autoSwitchEnabled = toolsCfg.auto_switch_models !== false
-    
+
     for (const item of await ToolRegistry.tools(input.model.providerID)) {
+      // Skip tools disabled by agent's ruleset
+      if (disabledTools.has(item.id)) continue
       if (Wildcard.all(item.id, enabledTools) === false) continue
       // Hide switch_mode tool if auto-switching is disabled
       if (item.id === "switch_mode" && !autoSwitchEnabled) continue
@@ -853,6 +853,8 @@ export namespace SessionPrompt {
     }
 
     for (const [key, item] of Object.entries(await MCP.tools())) {
+      // Skip tools disabled by agent's ruleset
+      if (disabledTools.has(key)) continue
       if (Wildcard.all(key, enabledTools) === false) continue
       const execute = item.execute
       if (!execute) continue
@@ -922,7 +924,7 @@ export namespace SessionPrompt {
 
   async function createUserMessage(input: PromptInput) {
     const agent = await Agent.get(input.agent ?? "build")
-    
+
     // Resolve model: check agent-specific model config
     let resolvedModel = input.model
     if (!resolvedModel) {
@@ -930,7 +932,7 @@ export namespace SessionPrompt {
       // Check for agent-specific model in config
       const agentModelKey = `${agent.name}_model` as keyof typeof cfg
       const agentModel = cfg[agentModelKey] as string | undefined
-      
+
       if (agentModel) {
         resolvedModel = Provider.parseModel(agentModel)
       } else {
@@ -938,7 +940,7 @@ export namespace SessionPrompt {
         resolvedModel = agent.model ?? (await lastModel(input.sessionID))
       }
     }
-    
+
     const info: MessageV2.Info = {
       id: input.messageID ?? Identifier.ascending("message"),
       role: "user",
@@ -1636,17 +1638,18 @@ export namespace SessionPrompt {
   }): Promise<{ shouldSwitch: boolean; reason: string }> {
     try {
       const small =
-        (await Provider.getSmallModel(input.providerID)) ??
-        (await Provider.getModel(input.providerID, input.modelID))
+        (await Provider.getSmallModel(input.providerID)) ?? (await Provider.getModel(input.providerID, input.modelID))
       const language = await Provider.getLanguage(small)
 
       const result = await generateObject({
         model: language,
         temperature: 0,
         schema: z.object({
-          intent: z.enum(["execute", "question", "planning"]).describe(
-            "execute: the plan is complete and ready to implement. question: asking user for clarification or input. planning: still thinking or presenting options."
-          ),
+          intent: z
+            .enum(["execute", "question", "planning"])
+            .describe(
+              "execute: the plan is complete and ready to implement. question: asking user for clarification or input. planning: still thinking or presenting options.",
+            ),
           reason: z.string().describe("Brief explanation of why this intent was chosen"),
         }),
         prompt: `Analyze this assistant response and determine its intent:

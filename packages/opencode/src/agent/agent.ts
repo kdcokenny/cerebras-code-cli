@@ -7,6 +7,7 @@ import PROMPT_GENERATE from "./generate.txt"
 import { SystemPrompt } from "../session/system"
 import { Instance } from "../project/instance"
 import { mergeDeep } from "remeda"
+import { PermissionNext } from "../permission/next"
 
 export namespace Agent {
   export const Info = z
@@ -25,6 +26,7 @@ export namespace Agent {
         doom_loop: Config.Permission.optional(),
         external_directory: Config.Permission.optional(),
       }),
+      ruleset: z.lazy(() => PermissionNext.Ruleset),
       model: z
         .object({
           modelID: z.string(),
@@ -54,6 +56,7 @@ export namespace Agent {
       external_directory: "ask",
     }
     const agentPermission = mergeAgentPermissions(defaultPermission, cfg.permission ?? {})
+    const agentRuleset = PermissionNext.fromConfig(agentPermission)
 
     const planPermission = mergeAgentPermissions(
       {
@@ -100,6 +103,7 @@ export namespace Agent {
       },
       cfg.permission ?? {},
     )
+    const planRuleset = PermissionNext.fromConfig(planPermission)
 
     const result: Record<string, Info> = {
       general: {
@@ -112,6 +116,7 @@ export namespace Agent {
         },
         options: {},
         permission: agentPermission,
+        ruleset: agentRuleset,
         mode: "subagent",
         builtIn: true,
       },
@@ -147,6 +152,7 @@ export namespace Agent {
         ].join("\n"),
         options: {},
         permission: agentPermission,
+        ruleset: agentRuleset,
         mode: "subagent",
         builtIn: true,
       },
@@ -155,6 +161,7 @@ export namespace Agent {
         tools: { ...defaultTools },
         options: {},
         permission: agentPermission,
+        ruleset: agentRuleset,
         mode: "primary",
         builtIn: true,
       },
@@ -162,6 +169,7 @@ export namespace Agent {
         name: "plan",
         options: {},
         permission: planPermission,
+        ruleset: planRuleset,
         tools: {
           ...defaultTools,
         },
@@ -180,6 +188,7 @@ export namespace Agent {
           name: key,
           mode: "all",
           permission: agentPermission,
+          ruleset: agentRuleset,
           options: {},
           tools: {},
           builtIn: false,
@@ -224,6 +233,7 @@ export namespace Agent {
 
       if (permission ?? cfg.permission) {
         item.permission = mergeAgentPermissions(cfg.permission ?? {}, permission ?? {})
+        item.ruleset = PermissionNext.fromConfig(item.permission)
       }
     }
     return result

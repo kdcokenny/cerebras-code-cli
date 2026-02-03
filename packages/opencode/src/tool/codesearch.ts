@@ -1,8 +1,8 @@
 import z from "zod"
 import { Tool } from "./tool"
 import DESCRIPTION from "./codesearch.txt"
-import { Config } from "../config/config"
-import { Permission } from "../permission"
+import { PermissionNext } from "../permission/next"
+import { Agent } from "../agent/agent"
 
 const API_CONFIG = {
   BASE_URL: "https://mcp.exa.ai",
@@ -52,19 +52,24 @@ export const CodeSearchTool = Tool.define("codesearch", {
       ),
   }),
   async execute(params, ctx) {
-    const cfg = await Config.get()
-    if (cfg.permission?.webfetch === "ask")
-      await Permission.ask({
-        type: "codesearch",
+    const agent = await Agent.get(ctx.agent)
+    const rule = PermissionNext.evaluate("webfetch", params.query, agent.ruleset)
+    if (rule?.action === "deny") {
+      throw new PermissionNext.DeniedError(rule)
+    }
+    if (rule?.action === "ask") {
+      await PermissionNext.ask({
+        permission: "codesearch",
+        patterns: [params.query],
         sessionID: ctx.sessionID,
-        messageID: ctx.messageID,
-        callID: ctx.callID,
-        title: "Search code for: " + params.query,
         metadata: {
           query: params.query,
           tokensNum: params.tokensNum,
         },
+        always: ["*"],
+        tool: ctx.callID ? { messageID: ctx.messageID, callID: ctx.callID } : undefined,
       })
+    }
 
     const codeRequest: McpCodeRequest = {
       jsonrpc: "2.0",
