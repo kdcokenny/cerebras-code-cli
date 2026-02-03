@@ -11,7 +11,13 @@ import { lazy } from "../util/lazy"
 import { NamedError } from "@opencode-ai/util/error"
 import { Flag } from "../flag/flag"
 import { Auth } from "../auth"
-import { type ParseError as JsoncParseError, applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser"
+import {
+  type ParseError as JsoncParseError,
+  applyEdits,
+  modify,
+  parse as parseJsonc,
+  printParseErrorCode,
+} from "jsonc-parser"
 import { Instance } from "../project/instance"
 import { LSPServer } from "../lsp/server"
 import { BunProc } from "@/bun"
@@ -87,8 +93,6 @@ export namespace Config {
 
     const promises: Promise<void>[] = []
     for (const dir of directories) {
-      await assertValid(dir)
-
       if (dir.endsWith(".cerebras") || dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
         for (const file of ["cerebras.jsonc", "cerebras.json", "opencode.jsonc", "opencode.json"]) {
           log.debug(`loading config from ${path.join(dir, file)}`)
@@ -142,23 +146,6 @@ export namespace Config {
     }
   })
 
-  const INVALID_DIRS = new Bun.Glob(`{${["agents", "commands", "plugins", "tools"].join(",")}}/`)
-  async function assertValid(dir: string) {
-    const invalid = await Array.fromAsync(
-      INVALID_DIRS.scan({
-        onlyFiles: false,
-        cwd: dir,
-      }),
-    )
-    for (const item of invalid) {
-      throw new ConfigDirectoryTypoError({
-        path: dir,
-        dir: item,
-        suggestion: item.substring(0, item.length - 1),
-      })
-    }
-  }
-
   async function installDependencies(dir: string) {
     if (Installation.isLocal()) return
 
@@ -180,7 +167,20 @@ export namespace Config {
     ).catch(() => {})
   }
 
-  const COMMAND_GLOB = new Bun.Glob("command/**/*.md")
+  function rel(item: string, patterns: string[]) {
+    for (const pattern of patterns) {
+      const index = item.indexOf(pattern)
+      if (index === -1) continue
+      return item.slice(index + pattern.length)
+    }
+  }
+
+  function trim(file: string) {
+    const ext = path.extname(file)
+    return ext.length ? file.slice(0, -ext.length) : file
+  }
+
+  const COMMAND_GLOB = new Bun.Glob("{command,commands}/**/*.md")
   async function loadCommand(dir: string) {
     const result: Record<string, Command> = {}
     for await (const item of COMMAND_GLOB.scan({
@@ -192,16 +192,16 @@ export namespace Config {
       const md = await ConfigMarkdown.parse(item)
       if (!md.data) continue
 
-      const name = (() => {
-        const patterns = ["/.cerebras/command/", "/.opencode/command/", "/command/"]
-        const pattern = patterns.find((p) => item.includes(p))
-
-        if (pattern) {
-          const index = item.indexOf(pattern)
-          return item.slice(index + pattern.length, -3)
-        }
-        return path.basename(item, ".md")
-      })()
+      const patterns = [
+        "/.cerebras/command/",
+        "/.cerebras/commands/",
+        "/.opencode/command/",
+        "/.opencode/commands/",
+        "/command/",
+        "/commands/",
+      ]
+      const file = rel(item, patterns) ?? path.basename(item)
+      const name = trim(file)
 
       const config = {
         name,
@@ -218,7 +218,7 @@ export namespace Config {
     return result
   }
 
-  const AGENT_GLOB = new Bun.Glob("agent/**/*.md")
+  const AGENT_GLOB = new Bun.Glob("{agent,agents}/**/*.md")
   async function loadAgent(dir: string) {
     const result: Record<string, Agent> = {}
 
@@ -231,22 +231,16 @@ export namespace Config {
       const md = await ConfigMarkdown.parse(item)
       if (!md.data) continue
 
-      // Extract relative path from agent folder for nested agents
-      let agentName = path.basename(item, ".md")
-      const agentFolderPath = item.includes("/.cerebras/agent/")
-        ? item.split("/.cerebras/agent/")[1]
-        : item.includes("/.opencode/agent/")
-          ? item.split("/.opencode/agent/")[1]
-          : item.includes("/agent/")
-            ? item.split("/agent/")[1]
-            : agentName + ".md"
-
-      // If agent is in a subfolder, include folder path in name
-      if (agentFolderPath.includes("/")) {
-        const relativePath = agentFolderPath.replace(".md", "")
-        const pathParts = relativePath.split("/")
-        agentName = pathParts.slice(0, -1).join("/") + "/" + pathParts[pathParts.length - 1]
-      }
+      const patterns = [
+        "/.cerebras/agent/",
+        "/.cerebras/agents/",
+        "/.opencode/agent/",
+        "/.opencode/agents/",
+        "/agent/",
+        "/agents/",
+      ]
+      const file = rel(item, patterns) ?? path.basename(item)
+      const agentName = trim(file)
 
       const config = {
         name: agentName,
@@ -263,7 +257,7 @@ export namespace Config {
     return result
   }
 
-  const MODE_GLOB = new Bun.Glob("mode/*.md")
+  const MODE_GLOB = new Bun.Glob("{mode,modes}/**/*.md")
   async function loadMode(dir: string) {
     const result: Record<string, Agent> = {}
     for await (const item of MODE_GLOB.scan({
@@ -292,7 +286,7 @@ export namespace Config {
     return result
   }
 
-  const PLUGIN_GLOB = new Bun.Glob("plugin/*.{ts,js}")
+  const PLUGIN_GLOB = new Bun.Glob("{plugin,plugins}/**/*.{ts,js}")
   async function loadPlugin(dir: string) {
     const plugins: string[] = []
 
@@ -877,15 +871,6 @@ export namespace Config {
     z.object({
       path: z.string(),
       message: z.string().optional(),
-    }),
-  )
-
-  export const ConfigDirectoryTypoError = NamedError.create(
-    "ConfigDirectoryTypoError",
-    z.object({
-      path: z.string(),
-      dir: z.string(),
-      suggestion: z.string(),
     }),
   )
 

@@ -501,3 +501,117 @@ test("deduplicates duplicate plugins from global and local configs", async () =>
     },
   })
 })
+
+test("loads commands from .opencode/commands/ (plural)", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const opencodeDir = path.join(dir, ".opencode")
+      const commandsDir = path.join(opencodeDir, "commands")
+      await fs.mkdir(commandsDir, { recursive: true })
+
+      await Bun.write(
+        path.join(commandsDir, "test.md"),
+        `---
+description: Test command
+---
+Test command template`,
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.command?.["test"]).toBeDefined()
+      expect(config.command?.["test"].description).toBe("Test command")
+      expect(config.command?.["test"].template).toBe("Test command template")
+    },
+  })
+})
+
+test("loads agents from .opencode/agents/ (plural)", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const opencodeDir = path.join(dir, ".opencode")
+      const agentsDir = path.join(opencodeDir, "agents")
+      await fs.mkdir(agentsDir, { recursive: true })
+
+      await Bun.write(
+        path.join(agentsDir, "test.md"),
+        `---
+model: test/model
+---
+Test agent prompt`,
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.agent?.["test"]).toEqual({
+        name: "test",
+        model: "test/model",
+        prompt: "Test agent prompt",
+      })
+    },
+  })
+})
+
+test("loads nested commands from plural directory", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const opencodeDir = path.join(dir, ".opencode")
+      const commandsDir = path.join(opencodeDir, "commands", "email")
+      await fs.mkdir(commandsDir, { recursive: true })
+
+      await Bun.write(
+        path.join(commandsDir, "digest.md"),
+        `---
+description: Email digest command
+---
+Generate email digest`,
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.command?.["email/digest"]).toBeDefined()
+      expect(config.command?.["email/digest"].description).toBe("Email digest command")
+      expect(config.command?.["email/digest"].template).toBe("Generate email digest")
+    },
+  })
+})
+
+test("loads nested agents from plural directory", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const opencodeDir = path.join(dir, ".opencode")
+      const agentsDir = path.join(opencodeDir, "agents", "code")
+      await fs.mkdir(agentsDir, { recursive: true })
+
+      await Bun.write(
+        path.join(agentsDir, "reviewer.md"),
+        `---
+model: test/reviewer-model
+description: Code reviewer agent
+---
+Review code for issues`,
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Config.get()
+      expect(config.agent?.["code/reviewer"]).toEqual({
+        name: "code/reviewer",
+        model: "test/reviewer-model",
+        description: "Code reviewer agent",
+        prompt: "Review code for issues",
+      })
+    },
+  })
+})
