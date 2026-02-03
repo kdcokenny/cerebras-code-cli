@@ -2,6 +2,8 @@ import { Ripgrep } from "../file/ripgrep"
 import { Global } from "../global"
 import { Filesystem } from "../util/filesystem"
 import { Config } from "../config/config"
+import { Log } from "../util/log"
+import { Flag } from "../flag/flag"
 
 import { Instance } from "../project/instance"
 import path from "path"
@@ -20,6 +22,8 @@ import PROMPT_CODEX from "./prompt/codex.txt"
 import type { Provider } from "@/provider/provider"
 
 export namespace SystemPrompt {
+  const log = Log.create({ service: "system-prompt" })
+
   export function header(providerID: string) {
     if (providerID.includes("anthropic")) return [PROMPT_ANTHROPIC_SPOOF.trim()]
     return []
@@ -70,15 +74,34 @@ export namespace SystemPrompt {
     path.join(os.homedir(), ".claude", "CLAUDE.md"),
   ]
 
+  function resolveRelativeInstruction(instruction: string): string | null {
+    // Absolute paths and home-relative paths are always allowed
+    if (path.isAbsolute(instruction) || instruction.startsWith("~/")) {
+      return instruction
+    }
+
+    // Relative paths require project config to be enabled, OR explicit config dir
+    if (Flag.OPENCODE_DISABLE_PROJECT_CONFIG && !Flag.OPENCODE_CONFIG_DIR) {
+      log.warn("Skipping relative instruction path because OPENCODE_DISABLE_PROJECT_CONFIG is set", {
+        instruction,
+      })
+      return null
+    }
+
+    return instruction
+  }
+
   export async function custom() {
     const config = await Config.get()
     const paths = new Set<string>()
 
-    for (const localRuleFile of LOCAL_RULE_FILES) {
-      const matches = await Filesystem.findUp(localRuleFile, Instance.directory, Instance.worktree)
-      if (matches.length > 0) {
-        matches.forEach((path) => paths.add(path))
-        break
+    if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
+      for (const localRuleFile of LOCAL_RULE_FILES) {
+        const matches = await Filesystem.findUp(localRuleFile, Instance.directory, Instance.worktree)
+        if (matches.length > 0) {
+          matches.forEach((path) => paths.add(path))
+          break
+        }
       }
     }
 
@@ -91,6 +114,10 @@ export namespace SystemPrompt {
 
     if (config.instructions) {
       for (let instruction of config.instructions) {
+        const resolved = resolveRelativeInstruction(instruction)
+        if (!resolved) continue
+        instruction = resolved
+
         if (instruction.startsWith("~/")) {
           instruction = path.join(os.homedir(), instruction.slice(2))
         }
