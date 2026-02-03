@@ -140,6 +140,9 @@ export namespace Server {
         },
       )
       .use(async (c, next) => {
+        // Skip Instance.provide for /log to prevent circular dependency
+        if (c.req.path === "/log") return next()
+
         const directory = c.req.query("directory") ?? c.req.header("x-opencode-directory") ?? process.cwd()
         return Instance.provide({
           directory,
