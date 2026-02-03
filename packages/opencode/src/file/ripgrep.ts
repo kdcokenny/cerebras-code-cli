@@ -205,8 +205,10 @@ export namespace Ripgrep {
     return filepath
   }
 
-  export async function* files(input: { cwd: string; glob?: string[] }) {
-    const args = [await filepath(), "--files", "--follow", "--hidden", "--glob=!.git/*"]
+  export async function* files(input: { cwd: string; glob?: string[]; hidden?: boolean; follow?: boolean }) {
+    const args = [await filepath(), "--files", "--glob=!.git/*"]
+    if (input.follow) args.push("--follow")
+    if (input.hidden !== false) args.push("--hidden")
     if (input.glob) {
       for (const g of input.glob) {
         args.push(`--glob=${g}`)
@@ -357,8 +359,15 @@ export namespace Ripgrep {
     return lines.join("\n")
   }
 
-  export async function search(input: { cwd: string; pattern: string; glob?: string[]; limit?: number }) {
+  export async function search(input: {
+    cwd: string
+    pattern: string
+    glob?: string[]
+    limit?: number
+    follow?: boolean
+  }) {
     const args = [`${await filepath()}`, "--json", "--hidden", "--glob='!.git/*'"]
+    if (input.follow) args.push("--follow")
 
     if (input.glob) {
       for (const g of input.glob) {
